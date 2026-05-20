@@ -99,6 +99,19 @@ local function moveAlongCurve(from, to, steps, holdMs, stepJ, curveOff, stepDela
   end
 end
 
+-- Tap that consumes all physical mouse movement.  Created lazily, kept around,
+-- start()/stop()'d per cast so the user's hand can't fight the macro.
+local mouseLockTap
+local function ensureMouseLockTap()
+  if mouseLockTap then return end
+  mouseLockTap = hs.eventtap.new({
+    hs.eventtap.event.types.mouseMoved,
+    hs.eventtap.event.types.leftMouseDragged,
+    hs.eventtap.event.types.rightMouseDragged,
+    hs.eventtap.event.types.otherMouseDragged,
+  }, function() return true end)
+end
+
 local function loadSpell(wheel, slot)
   local g, t = config.geometry, config.tuning
   local base = g.slots[slot]; if not base then return end
@@ -112,13 +125,20 @@ local function loadSpell(wheel, slot)
   local center  = { x = sc.x + sc.w/2, y = sc.y + sc.h/2 }
   local target  = { x = center.x + radius*math.cos(angle),
                     y = center.y + radius*math.sin(angle) }
-  hs.eventtap.event.newKeyEvent({}, wheel, true):post()
-  hs.timer.usleep(math.floor(jitter(t.pre_ms, t.pre_jitter_ms) * 1000))
-  moveAlongCurve(center, target, steps, holdMs, t.step_jitter_px, t.curve_offset, t.step_delay_jitter_ms or 0)
-  hs.timer.usleep(math.floor(math.max(0, jitter(holdMs*0.3, t.hold_jitter_ms)) * 1000))
-  hs.eventtap.event.newKeyEvent({}, wheel, false):post()
-  hs.timer.usleep(math.floor(postMs * 1000))
-  hs.mouse.absolutePosition(origin)
+
+  ensureMouseLockTap()
+  mouseLockTap:start()
+  local ok, err = pcall(function()
+    hs.eventtap.event.newKeyEvent({}, wheel, true):post()
+    hs.timer.usleep(math.floor(jitter(t.pre_ms, t.pre_jitter_ms) * 1000))
+    moveAlongCurve(center, target, steps, holdMs, t.step_jitter_px, t.curve_offset, t.step_delay_jitter_ms or 0)
+    hs.timer.usleep(math.floor(math.max(0, jitter(holdMs*0.3, t.hold_jitter_ms)) * 1000))
+    hs.eventtap.event.newKeyEvent({}, wheel, false):post()
+    hs.timer.usleep(math.floor(postMs * 1000))
+    hs.mouse.absolutePosition(origin)
+  end)
+  mouseLockTap:stop()
+  if not ok then print("loadSpell error: " .. tostring(err)) end
 end
 
 local registeredHotkeys = {}

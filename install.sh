@@ -44,7 +44,7 @@ fi
 
 # 4. Reload
 echo "==> Reloading Hammerspoon config"
-osascript -e 'tell application "Hammerspoon" to reload config' 2>/dev/null || \
+osascript -e 'tell application "Hammerspoon" to execute lua code "hs.reload()"' 2>/dev/null || \
   echo "    (Could not auto-reload — click the Hammerspoon menu → Reload Config)"
 
 echo

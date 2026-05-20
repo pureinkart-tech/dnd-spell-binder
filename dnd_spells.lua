@@ -20,9 +20,12 @@ local DEFAULT_CONFIG = {
   },
   tuning = {
     radius_jitter=25, angle_jitter=8,
-    hold_ms=55, hold_jitter_ms=12,
+    hold_ms=55, hold_ms_jitter=10, hold_jitter_ms=12,
     pre_ms=15,  pre_jitter_ms=6,
-    steps=5, step_jitter_px=4, curve_offset=18,
+    post_ms=8,  post_jitter_ms=3,
+    steps=5, steps_jitter=1,
+    step_jitter_px=4, step_delay_jitter_ms=3,
+    curve_offset=18,
   },
   bindings = {
     { kind="key", ident="f1",  wheel="q", slot=1, mods={} },
@@ -40,6 +43,18 @@ local DEFAULT_CONFIG = {
 
 local config
 
+local function fillDefaults(cfg)
+  cfg.tuning = cfg.tuning or {}
+  for k, v in pairs(DEFAULT_CONFIG.tuning) do
+    if cfg.tuning[k] == nil then cfg.tuning[k] = v end
+  end
+  cfg.geometry = cfg.geometry or {}
+  for k, v in pairs(DEFAULT_CONFIG.geometry) do
+    if cfg.geometry[k] == nil then cfg.geometry[k] = v end
+  end
+  cfg.bindings = cfg.bindings or DEFAULT_CONFIG.bindings
+end
+
 local function loadConfig()
   local f = io.open(CONFIG_PATH, "r")
   if not f then config = DEFAULT_CONFIG; M.saveConfig(); return end
@@ -47,6 +62,8 @@ local function loadConfig()
   local ok, parsed = pcall(hs.json.decode, raw)
   if ok and parsed then config = parsed
   else hs.alert.show("D&D spells: bad JSON, using defaults"); config = DEFAULT_CONFIG end
+  fillDefaults(config)
+  M.saveConfig()   -- persist any newly-filled defaults so the JSON stays current
 end
 
 function M.saveConfig()
@@ -64,38 +81,43 @@ local function bezier(p0, p1, p2, t)
            y = u*u*p0.y + 2*u*t*p1.y + t*t*p2.y }
 end
 
-local function moveAlongCurve(from, to, steps, holdMs, stepJ, curveOff)
+local function moveAlongCurve(from, to, steps, holdMs, stepJ, curveOff, stepDelayJitterMs)
   local dx, dy = to.x - from.x, to.y - from.y
   local len = math.sqrt(dx*dx + dy*dy); if len == 0 then return end
   local nx, ny = -dy/len, dx/len
   local bow = jitter(0, curveOff)
   local mid = { x = (from.x+to.x)/2 + nx*bow, y = (from.y+to.y)/2 + ny*bow }
-  local stepDelay = math.floor((holdMs * 1000) / steps)
+  local baseStepDelay = (holdMs * 1000) / steps   -- microseconds
+  local sdJitterUs = (stepDelayJitterMs or 0) * 1000
   for i = 1, steps do
     local t = i / steps
     local p = bezier(from, mid, to, t)
     p.x = p.x + jitter(0, stepJ); p.y = p.y + jitter(0, stepJ)
     hs.mouse.absolutePosition(p)
-    hs.timer.usleep(stepDelay)
+    local delay = math.floor(baseStepDelay + jitter(0, sdJitterUs))
+    if delay > 0 then hs.timer.usleep(delay) end
   end
 end
 
 local function loadSpell(wheel, slot)
   local g, t = config.geometry, config.tuning
   local base = g.slots[slot]; if not base then return end
-  local angle  = math.rad(jitter(base, t.angle_jitter))
-  local radius = jitter(g.flick_radius, t.radius_jitter)
-  local origin = hs.mouse.absolutePosition()
-  local sc = hs.mouse.getCurrentScreen():fullFrame()
-  local center = { x = sc.x + sc.w/2, y = sc.y + sc.h/2 }
-  local target = { x = center.x + radius*math.cos(angle),
-                   y = center.y + radius*math.sin(angle) }
+  local angle   = math.rad(jitter(base, t.angle_jitter))
+  local radius  = jitter(g.flick_radius, t.radius_jitter)
+  local holdMs  = math.max(10, jitter(t.hold_ms, t.hold_ms_jitter or 0))
+  local steps   = math.max(2, math.floor(jitter(t.steps, t.steps_jitter or 0) + 0.5))
+  local postMs  = math.max(0, jitter(t.post_ms or 8, t.post_jitter_ms or 0))
+  local origin  = hs.mouse.absolutePosition()
+  local sc      = hs.mouse.getCurrentScreen():fullFrame()
+  local center  = { x = sc.x + sc.w/2, y = sc.y + sc.h/2 }
+  local target  = { x = center.x + radius*math.cos(angle),
+                    y = center.y + radius*math.sin(angle) }
   hs.eventtap.event.newKeyEvent({}, wheel, true):post()
   hs.timer.usleep(math.floor(jitter(t.pre_ms, t.pre_jitter_ms) * 1000))
-  moveAlongCurve(center, target, t.steps, t.hold_ms, t.step_jitter_px, t.curve_offset)
-  hs.timer.usleep(math.floor(jitter(t.hold_ms*0.3, t.hold_jitter_ms) * 1000))
+  moveAlongCurve(center, target, steps, holdMs, t.step_jitter_px, t.curve_offset, t.step_delay_jitter_ms or 0)
+  hs.timer.usleep(math.floor(math.max(0, jitter(holdMs*0.3, t.hold_jitter_ms)) * 1000))
   hs.eventtap.event.newKeyEvent({}, wheel, false):post()
-  hs.timer.usleep(8000)
+  hs.timer.usleep(math.floor(postMs * 1000))
   hs.mouse.absolutePosition(origin)
 end
 

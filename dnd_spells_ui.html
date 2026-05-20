@@ -15,8 +15,11 @@
   button.danger  { background:#ff453a; border-color:#ff453a; }
   .capture { font-family:ui-monospace,Menlo,monospace; min-width:120px; text-align:left; }
   .capture.listening { background:#ff9f0a; color:#000; }
-  select { background:#2c2c2e; color:#f0f0f0; border:1px solid #555;
-           padding:4px; border-radius:4px; }
+  select, input[type="number"] { background:#2c2c2e; color:#f0f0f0; border:1px solid #555;
+           padding:4px; border-radius:4px; font:inherit; }
+  input[type="number"] { width:60px; text-align:right; -moz-appearance:textfield; }
+  input[type="number"]::-webkit-inner-spin-button,
+  input[type="number"]::-webkit-outer-spin-button { -webkit-appearance:none; margin:0; }
   .toolbar { margin:12px 0; display:flex; gap:8px; }
   .help { color:#888; font-size:11px; margin-top:16px; line-height:1.5; }
 </style></head><body>
@@ -29,7 +32,7 @@
 </div>
 
 <table>
-  <thead><tr><th>Key / Button</th><th>Modifiers</th><th>Wheel</th><th>Slot</th><th></th></tr></thead>
+  <thead><tr><th>Key / Button</th><th>Modifiers</th><th>Wheel</th><th>Slot</th><th>Delay&nbsp;(ms)</th><th></th></tr></thead>
   <tbody id="rows"></tbody>
 </table>
 
@@ -38,7 +41,8 @@
   Slots are <strong>1=top, 2=upper-right, 3=lower-right, 4=lower-left, 5=upper-left</strong> (clockwise from 12 o'clock).<br>
   Mouse 3=middle click, Mouse 4=first thumb button, higher numbers=extra side buttons.<br>
   <strong>Multi-cast:</strong> add two (or more) rows with the same key to fire multiple spells back-to-back from one press &mdash; e.g. Q1 + E1 on the same button loads slot 1 in both hands for a merge cast.<br>
-  <strong>Hold to commit, release to cancel:</strong> releasing the button mid-cast aborts the macro and returns control of the mouse instantly. Hold ~150ms for a single spell, longer for multi-cast sequences.
+  <strong>Delay (ms):</strong> wait this long <em>before</em> firing this row. Row 1's delay = hold-then-fire. Rows 2+'s delay = gap between casts in a sequence. 0 = fire immediately.<br>
+  <strong>Hold to commit, release to cancel:</strong> releasing the button mid-cast aborts the macro and returns control of the mouse instantly. Hold long enough for the whole sequence (including any delays) to complete.
 </p>
 
 <script>
@@ -85,6 +89,13 @@ function render() {
     ss.onchange = () => { b.slot = parseInt(ss.value); save(); };
     tdS.appendChild(ss); tr.appendChild(tdS);
 
+    const tdD = document.createElement("td");
+    const di = document.createElement("input");
+    di.type = "number"; di.min = "0"; di.max = "5000"; di.step = "50";
+    di.value = b.delay_ms || 0;
+    di.onchange = () => { b.delay_ms = Math.max(0, parseInt(di.value) || 0); save(); };
+    tdD.appendChild(di); tr.appendChild(tdD);
+
     const tdA = document.createElement("td");
     const del = document.createElement("button");
     del.className = "danger"; del.textContent = "Remove";
@@ -106,7 +117,7 @@ window.captureDone = function(p) {
 
 function addRow() {
   config.bindings = config.bindings || [];
-  config.bindings.push({ kind:"key", ident:"", wheel:"q", slot:1, mods:[] });
+  config.bindings.push({ kind:"key", ident:"", wheel:"q", slot:1, mods:[], delay_ms:0 });
   save(); render();
 }
 

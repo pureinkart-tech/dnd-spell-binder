@@ -216,7 +216,9 @@ end
 
 -- Sequence runner: lets a single button fire multiple (wheel, slot) casts
 -- back-to-back.  Cancellation from the released callback aborts the whole
--- sequence at the next safe point.
+-- sequence at the next safe point.  Each action's `delay_ms` is honored
+-- before that action fires (so row 2's delay is the gap between cast 1 and
+-- cast 2).  Row 1's delay also works -- use it as a hold-then-fire delay.
 local activeSequence
 local function loadSpellSequence(actions)
   if activeSequence then activeSequence.cancelled = true end
@@ -229,7 +231,12 @@ local function loadSpellSequence(actions)
       return
     end
     local a = actions[i]
-    loadSpell(a.wheel, a.slot, function() runNext(i+1) end)
+    local delay = math.max(0, tonumber(a.delay_ms) or 0)
+    local function fire()
+      if seq.cancelled then return end
+      loadSpell(a.wheel, a.slot, function() runNext(i+1) end)
+    end
+    if delay > 0 then hs.timer.doAfter(delay / 1000, fire) else fire() end
   end
   runNext(1)
 end
@@ -277,7 +284,10 @@ local function bindAll()
         groups[key] = { kind = b.kind, ident = b.ident, mods = b.mods or {}, actions = {} }
         table.insert(order, key)
       end
-      table.insert(groups[key].actions, { wheel = b.wheel, slot = b.slot })
+      table.insert(groups[key].actions, {
+        wheel = b.wheel, slot = b.slot,
+        delay_ms = tonumber(b.delay_ms) or 0,
+      })
     end
   end
 

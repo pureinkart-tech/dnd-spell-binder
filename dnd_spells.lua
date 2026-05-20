@@ -81,24 +81,6 @@ local function bezier(p0, p1, p2, t)
            y = u*u*p0.y + 2*u*t*p1.y + t*t*p2.y }
 end
 
-local function moveAlongCurve(from, to, steps, holdMs, stepJ, curveOff, stepDelayJitterMs)
-  local dx, dy = to.x - from.x, to.y - from.y
-  local len = math.sqrt(dx*dx + dy*dy); if len == 0 then return end
-  local nx, ny = -dy/len, dx/len
-  local bow = jitter(0, curveOff)
-  local mid = { x = (from.x+to.x)/2 + nx*bow, y = (from.y+to.y)/2 + ny*bow }
-  local baseStepDelay = (holdMs * 1000) / steps   -- microseconds
-  local sdJitterUs = (stepDelayJitterMs or 0) * 1000
-  for i = 1, steps do
-    local t = i / steps
-    local p = bezier(from, mid, to, t)
-    p.x = p.x + jitter(0, stepJ); p.y = p.y + jitter(0, stepJ)
-    hs.mouse.absolutePosition(p)
-    local delay = math.floor(baseStepDelay + jitter(0, sdJitterUs))
-    if delay > 0 then hs.timer.usleep(delay) end
-  end
-end
-
 -- Tap that consumes all physical mouse movement.  Created lazily, kept around,
 -- start()/stop()'d per cast so the user's hand can't fight the macro.
 local mouseLockTap
@@ -112,7 +94,34 @@ local function ensureMouseLockTap()
   }, function() return true end)
 end
 
-local function loadSpell(wheel, slot)
+-- Single-flight macro tracker. Releasing the bound key cancels the in-flight
+-- cast immediately: scheduled steps short-circuit, wheel key releases, mouse
+-- lock stops, cursor snaps back to where you were aiming.
+local activeMacro
+
+local function tearDown(macro)
+  if not macro or macro.done then return end
+  macro.done = true
+  hs.eventtap.event.newKeyEvent({}, macro.wheel, false):post()
+  if mouseLockTap then mouseLockTap:stop() end
+  if macro.origin then hs.mouse.absolutePosition(macro.origin) end
+  if activeMacro == macro then activeMacro = nil end
+end
+
+local function cancelActiveMacro()
+  if activeMacro and not activeMacro.done then
+    activeMacro.cancelled = true
+    tearDown(activeMacro)
+  end
+end
+
+local function loadSpell(wheel, slot, onDone)
+  -- A new cast cancels any in-flight one
+  if activeMacro and not activeMacro.done then
+    activeMacro.cancelled = true
+    tearDown(activeMacro)
+  end
+
   local g, t = config.geometry, config.tuning
   local base = g.slots[slot]; if not base then return end
   local angle   = math.rad(jitter(base, t.angle_jitter))
@@ -120,25 +129,94 @@ local function loadSpell(wheel, slot)
   local holdMs  = math.max(10, jitter(t.hold_ms, t.hold_ms_jitter or 0))
   local steps   = math.max(2, math.floor(jitter(t.steps, t.steps_jitter or 0) + 0.5))
   local postMs  = math.max(0, jitter(t.post_ms or 8, t.post_jitter_ms or 0))
+  local preMs   = math.max(0, jitter(t.pre_ms, t.pre_jitter_ms))
+  local settleMs= math.max(0, jitter(holdMs*0.3, t.hold_jitter_ms))
   local origin  = hs.mouse.absolutePosition()
   local sc      = hs.mouse.getCurrentScreen():fullFrame()
   local center  = { x = sc.x + sc.w/2, y = sc.y + sc.h/2 }
   local target  = { x = center.x + radius*math.cos(angle),
                     y = center.y + radius*math.sin(angle) }
 
+  -- Precompute Bezier waypoints
+  local waypoints = {}
+  local dx, dy = target.x - center.x, target.y - center.y
+  local len = math.sqrt(dx*dx + dy*dy)
+  if len == 0 then
+    waypoints[1] = target
+  else
+    local nx, ny = -dy/len, dx/len
+    local bow = jitter(0, t.curve_offset)
+    local mid = { x = (center.x+target.x)/2 + nx*bow,
+                  y = (center.y+target.y)/2 + ny*bow }
+    for i = 1, steps do
+      local tt = i / steps
+      local p = bezier(center, mid, target, tt)
+      p.x = p.x + jitter(0, t.step_jitter_px)
+      p.y = p.y + jitter(0, t.step_jitter_px)
+      waypoints[i] = p
+    end
+  end
+  local baseStepDelay = holdMs / #waypoints
+  local sdJitter = t.step_delay_jitter_ms or 0
+
+  local macro = { cancelled = false, done = false, wheel = wheel, origin = origin }
+  activeMacro = macro
+
   ensureMouseLockTap()
   mouseLockTap:start()
-  local ok, err = pcall(function()
-    hs.eventtap.event.newKeyEvent({}, wheel, true):post()
-    hs.timer.usleep(math.floor(jitter(t.pre_ms, t.pre_jitter_ms) * 1000))
-    moveAlongCurve(center, target, steps, holdMs, t.step_jitter_px, t.curve_offset, t.step_delay_jitter_ms or 0)
-    hs.timer.usleep(math.floor(math.max(0, jitter(holdMs*0.3, t.hold_jitter_ms)) * 1000))
-    hs.eventtap.event.newKeyEvent({}, wheel, false):post()
-    hs.timer.usleep(math.floor(postMs * 1000))
-    hs.mouse.absolutePosition(origin)
+  hs.eventtap.event.newKeyEvent({}, wheel, true):post()
+
+  local function step(i)
+    if macro.cancelled or macro.done then return end
+    if i > #waypoints then
+      hs.timer.doAfter(settleMs / 1000, function()
+        if macro.cancelled or macro.done then return end
+        hs.eventtap.event.newKeyEvent({}, wheel, false):post()
+        hs.timer.doAfter(postMs / 1000, function()
+          if macro.cancelled or macro.done then return end
+          macro.done = true
+          if mouseLockTap then mouseLockTap:stop() end
+          hs.mouse.absolutePosition(origin)
+          if activeMacro == macro then activeMacro = nil end
+          if onDone then onDone() end
+        end)
+      end)
+      return
+    end
+    hs.mouse.absolutePosition(waypoints[i])
+    local sd = math.max(0, baseStepDelay + jitter(0, sdJitter))
+    hs.timer.doAfter(sd / 1000, function() step(i+1) end)
+  end
+
+  hs.timer.doAfter(preMs / 1000, function()
+    if macro.cancelled or macro.done then return end
+    step(1)
   end)
-  mouseLockTap:stop()
-  if not ok then print("loadSpell error: " .. tostring(err)) end
+end
+
+-- Sequence runner: lets a single button fire multiple (wheel, slot) casts
+-- back-to-back.  Cancellation from the released callback aborts the whole
+-- sequence at the next safe point.
+local activeSequence
+local function loadSpellSequence(actions)
+  if activeSequence then activeSequence.cancelled = true end
+  local seq = { cancelled = false }
+  activeSequence = seq
+  local function runNext(i)
+    if seq.cancelled then return end
+    if i > #actions then
+      if activeSequence == seq then activeSequence = nil end
+      return
+    end
+    local a = actions[i]
+    loadSpell(a.wheel, a.slot, function() runNext(i+1) end)
+  end
+  runNext(1)
+end
+
+local function cancelActiveSequence()
+  if activeSequence then activeSequence.cancelled = true end
+  cancelActiveMacro()
 end
 
 local registeredHotkeys = {}
@@ -162,26 +240,50 @@ end
 
 local function bindAll()
   unbindAll()
-  local mouseUsed = false
+
+  -- Group bindings by (kind, ident, mods). Multiple rows on the same button
+  -- merge into one group whose actions all fire (sequentially) on press.
+  local function modKey(mods)
+    local copy = {}
+    for i, m in ipairs(mods or {}) do copy[i] = m end
+    table.sort(copy)
+    return table.concat(copy, "+")
+  end
+  local groups, order = {}, {}
   for _, b in ipairs(config.bindings or {}) do
-    if b.ident and b.ident ~= "" then
-      if b.kind == "key" then
-        local ok, hk = pcall(hs.hotkey.bind, b.mods or {}, b.ident,
-          function() loadSpell(b.wheel, b.slot) end)
-        if ok then table.insert(registeredHotkeys, hk) end
-      elseif b.kind == "mouse" then
-        local btn = MOUSE_BTN[b.ident]
-        if btn then
-          mouseHandlers[btn] = mouseHandlers[btn] or {}
-          table.insert(mouseHandlers[btn], {
-            mods = b.mods or {},
-            action = function() loadSpell(b.wheel, b.slot) end,
-          })
-          mouseUsed = true
-        end
+    if b.ident and b.ident ~= "" and b.wheel and b.slot then
+      local key = b.kind .. "|" .. b.ident .. "|" .. modKey(b.mods)
+      if not groups[key] then
+        groups[key] = { kind = b.kind, ident = b.ident, mods = b.mods or {}, actions = {} }
+        table.insert(order, key)
+      end
+      table.insert(groups[key].actions, { wheel = b.wheel, slot = b.slot })
+    end
+  end
+
+  local mouseUsed = false
+  for _, key in ipairs(order) do
+    local g = groups[key]
+    local actions = g.actions
+    if g.kind == "key" then
+      local ok, hk = pcall(hs.hotkey.bind, g.mods, g.ident,
+        function() loadSpellSequence(actions) end,   -- pressed
+        function() cancelActiveSequence() end        -- released
+      )
+      if ok then table.insert(registeredHotkeys, hk) end
+    elseif g.kind == "mouse" then
+      local btn = MOUSE_BTN[g.ident]
+      if btn then
+        mouseHandlers[btn] = mouseHandlers[btn] or {}
+        table.insert(mouseHandlers[btn], {
+          mods = g.mods,
+          action = function() loadSpellSequence(actions) end,
+        })
+        mouseUsed = true
       end
     end
   end
+
   if mouseUsed then
     mouseTap = hs.eventtap.new(
       { hs.eventtap.event.types.otherMouseDown,
@@ -190,12 +292,15 @@ local function bindAll()
         local btn = e:getProperty(hs.eventtap.event.properties.mouseEventButtonNumber)
         local handlers = mouseHandlers[btn]
         if not handlers then return false end
+        if e:getType() == hs.eventtap.event.types.otherMouseUp then
+          -- Any release of a bound mouse button cancels the in-flight cast
+          hs.timer.doAfter(0, cancelActiveSequence)
+          return true
+        end
         local flags = e:getFlags()
         for _, h in ipairs(handlers) do
           if modsMatch(flags, h.mods) then
-            if e:getType() == hs.eventtap.event.types.otherMouseDown then
-              hs.timer.doAfter(0, h.action)
-            end
+            hs.timer.doAfter(0, h.action)
             return true
           end
         end
@@ -204,7 +309,7 @@ local function bindAll()
     )
     mouseTap:start()
   end
-  print("D&D spells: " .. #(config.bindings or {}) .. " bindings active")
+  print("D&D spells: " .. #(config.bindings or {}) .. " bindings, " .. #order .. " unique trigger(s)")
 end
 
 local captureTap

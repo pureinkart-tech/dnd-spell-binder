@@ -12,8 +12,9 @@ local MOUSE_BTN = {
 local MOUSE_BTN_REV = {}
 for k, v in pairs(MOUSE_BTN) do MOUSE_BTN_REV[v] = k end
 
+local CURRENT_VERSION = 2
 local DEFAULT_CONFIG = {
-  version = 1,
+  version = CURRENT_VERSION,
   geometry = {
     slots = { -90, -18, 54, 126, -162 },   -- pentagon, point up
     flick_radius = 220,
@@ -21,11 +22,14 @@ local DEFAULT_CONFIG = {
   tuning = {
     radius_jitter=25, angle_jitter=8,
     hold_ms=55, hold_ms_jitter=10, hold_jitter_ms=12,
-    pre_ms=15,  pre_jitter_ms=6,
+    pre_ms=60,  pre_jitter_ms=15,             -- give the wheel time to fully open
     post_ms=8,  post_jitter_ms=3,
     steps=5, steps_jitter=1,
     step_jitter_px=4, step_delay_jitter_ms=3,
     curve_offset=18,
+    restore_cursor=false,                     -- snap mouse back to origin?  set true
+                                              -- only for cursor-mode games; in mouse-
+                                              -- look (D&D, FPS), snap-back = camera spin
   },
   bindings = {
     { kind="key", ident="f1",  wheel="q", slot=1, mods={} },
@@ -55,6 +59,19 @@ local function fillDefaults(cfg)
   cfg.bindings = cfg.bindings or DEFAULT_CONFIG.bindings
 end
 
+local function migrateConfig(cfg)
+  local v = cfg.version or 1
+  if v < 2 then
+    -- v2: drop snap-back (caused camera spin in mouse-look games),
+    -- bump pre_ms so the in-game wheel is open before we start moving.
+    cfg.tuning = cfg.tuning or {}
+    cfg.tuning.pre_ms = 60
+    cfg.tuning.pre_jitter_ms = 15
+    cfg.tuning.restore_cursor = false
+  end
+  cfg.version = CURRENT_VERSION
+end
+
 local function loadConfig()
   local f = io.open(CONFIG_PATH, "r")
   if not f then config = DEFAULT_CONFIG; M.saveConfig(); return end
@@ -63,6 +80,7 @@ local function loadConfig()
   if ok and parsed then config = parsed
   else hs.alert.show("D&D spells: bad JSON, using defaults"); config = DEFAULT_CONFIG end
   fillDefaults(config)
+  migrateConfig(config)
   M.saveConfig()   -- persist any newly-filled defaults so the JSON stays current
 end
 
@@ -104,7 +122,9 @@ local function tearDown(macro)
   macro.done = true
   hs.eventtap.event.newKeyEvent({}, macro.wheel, false):post()
   if mouseLockTap then mouseLockTap:stop() end
-  if macro.origin then hs.mouse.absolutePosition(macro.origin) end
+  if macro.origin and config and config.tuning and config.tuning.restore_cursor then
+    hs.mouse.absolutePosition(macro.origin)
+  end
   if activeMacro == macro then activeMacro = nil end
 end
 
@@ -176,7 +196,7 @@ local function loadSpell(wheel, slot, onDone)
           if macro.cancelled or macro.done then return end
           macro.done = true
           if mouseLockTap then mouseLockTap:stop() end
-          hs.mouse.absolutePosition(origin)
+          if t.restore_cursor then hs.mouse.absolutePosition(origin) end
           if activeMacro == macro then activeMacro = nil end
           if onDone then onDone() end
         end)

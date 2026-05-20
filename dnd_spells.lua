@@ -275,6 +275,7 @@ end
 
 local menubar
 function M.start()
+  pcall(hs.allowAppleScript, true)   -- enable osascript reloads from the installer
   loadConfig(); bindAll()
   menubar = hs.menubar.new()
   menubar:setTitle("🪄")

@@ -42,10 +42,14 @@ else
   echo "==> $INIT already has the require line"
 fi
 
-# 4. Reload
+# 4. Reload (first-time may fail if AppleScript isn't enabled yet; that's OK,
+#    our module enables it on load, so subsequent reloads will work)
 echo "==> Reloading Hammerspoon config"
-osascript -e 'tell application "Hammerspoon" to execute lua code "hs.reload()"' 2>/dev/null || \
-  echo "    (Could not auto-reload — click the Hammerspoon menu → Reload Config)"
+if ! osascript -e 'tell application "Hammerspoon" to execute lua code "hs.reload()"' 2>/dev/null; then
+  echo "    (First install — auto-reload not yet permitted. Click the Hammerspoon"
+  echo "     menu-bar icon → Reload Config to finish. After that, future updates"
+  echo "     can auto-reload from the command line.)"
+fi
 
 echo
 echo "✅ Done. Click the 🪄 in your menu bar → Settings… to bind keys."

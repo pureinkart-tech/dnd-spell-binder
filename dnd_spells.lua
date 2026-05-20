@@ -12,7 +12,7 @@ local MOUSE_BTN = {
 local MOUSE_BTN_REV = {}
 for k, v in pairs(MOUSE_BTN) do MOUSE_BTN_REV[v] = k end
 
-local CURRENT_VERSION = 2
+local CURRENT_VERSION = 3
 local DEFAULT_CONFIG = {
   version = CURRENT_VERSION,
   geometry = {
@@ -22,14 +22,12 @@ local DEFAULT_CONFIG = {
   tuning = {
     radius_jitter=25, angle_jitter=8,
     hold_ms=55, hold_ms_jitter=10, hold_jitter_ms=12,
-    pre_ms=60,  pre_jitter_ms=15,             -- give the wheel time to fully open
+    pre_ms=15,  pre_jitter_ms=6,
     post_ms=8,  post_jitter_ms=3,
     steps=5, steps_jitter=1,
     step_jitter_px=4, step_delay_jitter_ms=3,
     curve_offset=18,
-    restore_cursor=false,                     -- snap mouse back to origin?  set true
-                                              -- only for cursor-mode games; in mouse-
-                                              -- look (D&D, FPS), snap-back = camera spin
+    restore_cursor=true,                      -- snap cursor back to origin after cast
   },
   bindings = {
     { kind="key", ident="f1",  wheel="q", slot=1, mods={} },
@@ -61,13 +59,14 @@ end
 
 local function migrateConfig(cfg)
   local v = cfg.version or 1
-  if v < 2 then
-    -- v2: drop snap-back (caused camera spin in mouse-look games),
-    -- bump pre_ms so the in-game wheel is open before we start moving.
+  if v < 3 then
+    -- v3 reverts the v2 changes (long pre-delay + no snap-back) because they
+    -- caused worse camera spin AND wheel auto-dismissal on the user's setup.
+    -- Back to the known-working baseline.
     cfg.tuning = cfg.tuning or {}
-    cfg.tuning.pre_ms = 60
-    cfg.tuning.pre_jitter_ms = 15
-    cfg.tuning.restore_cursor = false
+    cfg.tuning.pre_ms = 15
+    cfg.tuning.pre_jitter_ms = 6
+    cfg.tuning.restore_cursor = true
   end
   cfg.version = CURRENT_VERSION
 end

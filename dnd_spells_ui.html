@@ -1,0 +1,121 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>D&D Spell Bindings</title>
+<style>
+  body { font: 13px -apple-system, sans-serif; background:#1c1c1e; color:#f0f0f0; margin:16px; }
+  h1 { margin-top:0; font-size:18px; }
+  table { width:100%; border-collapse:collapse; }
+  th { text-align:left; padding:8px 6px; border-bottom:1px solid #444;
+       font-weight:500; color:#aaa; font-size:11px; text-transform:uppercase; letter-spacing:.5px; }
+  td { padding:6px; border-bottom:1px solid #2c2c2e; }
+  tr:hover td { background:#2a2a2e; }
+  button { background:#3a3a3d; color:#f0f0f0; border:1px solid #555;
+           padding:5px 10px; border-radius:4px; cursor:pointer; font:inherit; }
+  button:hover { background:#48484a; }
+  button.primary { background:#0a84ff; border-color:#0a84ff; }
+  button.danger  { background:#ff453a; border-color:#ff453a; }
+  .capture { font-family:ui-monospace,Menlo,monospace; min-width:120px; text-align:left; }
+  .capture.listening { background:#ff9f0a; color:#000; }
+  select { background:#2c2c2e; color:#f0f0f0; border:1px solid #555;
+           padding:4px; border-radius:4px; }
+  .toolbar { margin:12px 0; display:flex; gap:8px; }
+  .help { color:#888; font-size:11px; margin-top:16px; line-height:1.5; }
+</style></head><body>
+
+<h1>🪄 D&D Spell Bindings</h1>
+
+<div class="toolbar">
+  <button class="primary" onclick="addRow()">+ Add Binding</button>
+  <button onclick="exportConfig()">Copy JSON to Clipboard</button>
+</div>
+
+<table>
+  <thead><tr><th>Key / Button</th><th>Modifiers</th><th>Wheel</th><th>Slot</th><th></th></tr></thead>
+  <tbody id="rows"></tbody>
+</table>
+
+<p class="help">
+  Click the key/button cell to capture a new binding &mdash; press any key or mouse button (Esc to cancel).<br>
+  Slots are <strong>1=top, 2=upper-right, 3=lower-right, 4=lower-left, 5=upper-left</strong> (clockwise from 12 o'clock).<br>
+  Mouse 3=middle click, Mouse 4=first thumb button, higher numbers=extra side buttons.
+</p>
+
+<script>
+let config = null;
+
+function send(msg) {
+  window.webkit.messageHandlers.dndspells.postMessage(JSON.stringify(msg));
+}
+
+function fmtIdent(b) {
+  if (!b.ident) return "(unset)";
+  return b.kind === "mouse" ? b.ident : b.ident.toUpperCase();
+}
+
+function render() {
+  const tbody = document.getElementById("rows");
+  tbody.innerHTML = "";
+  (config.bindings || []).forEach((b, i) => {
+    const tr = document.createElement("tr");
+
+    const tdKey = document.createElement("td");
+    const cap = document.createElement("button");
+    cap.className = "capture"; cap.textContent = fmtIdent(b);
+    cap.onclick = () => { cap.classList.add("listening"); cap.textContent="Press key…";
+                          send({type:"capture", rowIndex:i}); };
+    tdKey.appendChild(cap); tr.appendChild(tdKey);
+
+    const tdMods = document.createElement("td");
+    tdMods.textContent = (b.mods||[]).join("+") || "—";
+    if (!(b.mods||[]).length) tdMods.style.color = "#666";
+    tr.appendChild(tdMods);
+
+    const tdW = document.createElement("td");
+    const ws = document.createElement("select");
+    ["q","e"].forEach(w => { const o=document.createElement("option");
+      o.value=w; o.textContent=w.toUpperCase(); if (b.wheel===w) o.selected=true; ws.appendChild(o); });
+    ws.onchange = () => { b.wheel = ws.value; save(); };
+    tdW.appendChild(ws); tr.appendChild(tdW);
+
+    const tdS = document.createElement("td");
+    const ss = document.createElement("select");
+    [1,2,3,4,5].forEach(s => { const o=document.createElement("option");
+      o.value=s; o.textContent=s; if (b.slot===s) o.selected=true; ss.appendChild(o); });
+    ss.onchange = () => { b.slot = parseInt(ss.value); save(); };
+    tdS.appendChild(ss); tr.appendChild(tdS);
+
+    const tdA = document.createElement("td");
+    const del = document.createElement("button");
+    del.className = "danger"; del.textContent = "Remove";
+    del.onclick = () => { config.bindings.splice(i,1); save(); render(); };
+    tdA.appendChild(del); tr.appendChild(tdA);
+
+    tbody.appendChild(tr);
+  });
+}
+
+window.captureDone = function(p) {
+  if (p.result && config.bindings[p.rowIndex]) {
+    Object.assign(config.bindings[p.rowIndex],
+      { kind: p.result.kind, ident: p.result.ident, mods: p.result.mods || [] });
+    save();
+  }
+  render();
+};
+
+function addRow() {
+  config.bindings = config.bindings || [];
+  config.bindings.push({ kind:"key", ident:"", wheel:"q", slot:1, mods:[] });
+  save(); render();
+}
+
+function save() { send({ type:"save", config: config }); }
+
+function exportConfig() {
+  navigator.clipboard.writeText(JSON.stringify(config, null, 2));
+  alert("Config copied! Send the JSON to friends — they paste into dnd_spells.json.");
+}
+
+window.setConfig = function(c) { config = c; render(); };
+send({ type: "load" });
+</script>
+</body></html>
